@@ -1797,3 +1797,327 @@ def test_download_reports_failed_return_and_keeps_failed_status(tmp_path, monkey
     monkeypatch.setattr(cli, "download_acsm_with_gourou", lambda **kwargs: (True, tmp_path / "book.epub"))
 
     assert cli.run_download_command(_download_config(tmp_path), product.product_id) == 1
+
+
+def test_login_openid_valid_session_refresh_succeeds_without_browser(monkeypatch):
+    from onleiharr._vendor.onleihe import SessionState
+    from onleiharr.cli import login as cli_login
+
+    class Client:
+        onleihe_id = None
+        library_id = None
+        session = None
+        session_callback = None
+
+        def refresh(self):
+            pass
+
+    client = Client()
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="u", password="p"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session.json")
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: SessionState(access_token="existing", refresh_token="refresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid"))
+
+    cli_login(client, config)
+
+    assert client.onleihe_id == "oid"
+    assert client.library_id == "lid"
+
+
+def test_login_openid_missing_session_triggers_auto_login(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import login as cli_login
+
+    client = SimpleNamespace(
+        onleihe_id=None,
+        library_id=None,
+        session=None,
+        session_callback=None,
+    )
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session_missing.json")
+
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: (_ for _ in ()).throw(OnleiheAuthError("session not found")))
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append({
+            "username": username,
+            "password": password,
+            "headless": headless,
+            "timeout_secs": timeout_secs,
+        })
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr(cli, "save_session", fake_save_session)
+
+    cli_login(client, config)
+
+    assert client.onleihe_id == "oid"
+    assert client.library_id == "lid"
+    assert len(auto_login_calls) == 1
+    assert auto_login_calls[0]["username"] == "extuser"
+    assert auto_login_calls[0]["password"] == "extpass"
+    assert auto_login_calls[0]["headless"] is True
+    assert auto_login_calls[0]["timeout_secs"] == 120.0
+
+
+def test_login_openid_disabled_auto_login_preserves_error(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError
+    from onleiharr.cli import login as cli_login
+
+    client = SimpleNamespace(
+        onleihe_id=None,
+        library_id=None,
+        session=None,
+        session_callback=None,
+    )
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session_missing.json")
+
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: (_ for _ in ()).throw(OnleiheAuthError("session not found")))
+
+    with pytest.raises(OnleiheAuthError, match="session not found"):
+        cli_login(client, config)
+
+
+def test_login_openid_auto_login_failure_preserves_original_error(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError
+    from onleiharr.cli import login as cli_login
+
+    client = SimpleNamespace(
+        onleihe_id=None,
+        library_id=None,
+        session=None,
+        session_callback=None,
+    )
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session_missing.json")
+
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: (_ for _ in ()).throw(OnleiheAuthError("session not found")))
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        raise OnleiheAuthError("browser login failed")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+        cli_login(client, config)
+
+
+def test_login_openid_corrupt_session_triggers_auto_login(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import login as cli_login
+
+    client = SimpleNamespace(
+        onleihe_id=None,
+        library_id=None,
+        session=None,
+        session_callback=None,
+    )
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session_corrupt.json")
+
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: (_ for _ in ()).throw(OnleiheAuthError("invalid JSON")))
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr(cli, "save_session", fake_save_session)
+
+    cli_login(client, config)
+
+    assert client.onleihe_id == "oid"
+    assert client.library_id == "lid"
+    assert len(auto_login_calls) == 1
+
+
+def test_login_openid_refresh_failure_triggers_auto_login(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import login as cli_login
+
+    class Client:
+        onleihe_id = "existing-oid"
+        library_id = "existing-lid"
+        session = SessionState(access_token="stale", refresh_token="stale-refresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        session_callback = None
+
+        def refresh(self):
+            raise OnleiheAuthError("refresh rejected", status_code=401)
+
+    client = Client()
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    session_path = Path("/tmp/test_session_refresh.json")
+
+    monkeypatch.setattr(cli, "default_session_path", lambda config_path: session_path)
+    monkeypatch.setattr(cli, "load_session", lambda path: client.session)
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="fresh", refresh_token="fresh-refresh", user_id="uid", profile_id="pid", library_id="new-lid", onleihe_id="new-oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr(cli, "save_session", fake_save_session)
+
+    cli_login(client, config)
+
+    assert client.onleihe_id == "new-oid"
+    assert client.library_id == "new-lid"
+    assert len(auto_login_calls) == 1
+
+
+def test_login_openid_run_loop_sends_manual_notification_after_auto_login_failure(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import login as cli_login
+
+    class Client:
+        closed = False
+        onleihe_id = None
+        library_id = None
+        session = None
+        session_callback = None
+
+        def close(self):
+            self.closed = True
+
+        def maintenance_active(self):
+            return False
+
+    client = Client()
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        general=SimpleNamespace(
+            poll_interval_secs=300.0,
+            watch_product_ids=[],
+            watch_categories=[],
+        ),
+        notification=SimpleNamespace(test_notification=False),
+        gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+    )
+
+    monkeypatch.setattr(cli, "build_apprise", lambda config: None)
+    monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
+    monkeypatch.setattr(cli, "build_gourou_client", lambda config: None)
+
+    def fake_login(client, config):
+        raise OnleiheAuthError("auto-login failed")
+
+    monkeypatch.setattr(cli, "login", fake_login)
+
+    notifications = []
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        raise OnleiheAuthError("refresh rejected", status_code=401)
+
+    monkeypatch.setattr(cli, "fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    monkeypatch.setattr(
+        cli,
+        "notify_external_auth_required",
+        lambda apobj, config: notifications.append(config),
+    )
+
+    with pytest.raises(OnleiheAuthError):
+        cli.run_loop(config, SimpleNamespace(test_notification=False, once=True))
+
+    assert notifications == [config]
+    assert client.closed is True
+
+
+def test_login_upa_unchanged(monkeypatch):
+    from onleiharr.cli import login as cli_login
+
+    class Client:
+        onleihe_id = None
+        library_id = None
+
+        def login(self, username, password, **kwargs):
+            login_args.append({"username": username, "password": password, "kwargs": kwargs})
+
+    client = Client()
+    login_args = []
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(
+            auth_type="upa",
+            username="upauser",
+            password="upapass",
+            host="example.onleihe.de",
+            onleihe_name=None,
+            onleihe_id="onleihe-id",
+            library_name=None,
+            library_id="library-id",
+            session_path=None,
+        ),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+    )
+
+    cli_login(client, config)
+
+    assert len(login_args) == 1
+    assert login_args[0]["username"] == "upauser"
+    assert login_args[0]["password"] == "upapass"
+    assert login_args[0]["kwargs"]["onleihe_id"] == "onleihe-id"
+    assert login_args[0]["kwargs"]["library_id"] == "library-id"

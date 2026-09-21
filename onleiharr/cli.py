@@ -30,6 +30,7 @@ from onleiharr._vendor.onleihe import (
 )
 from onleiharr.auth import (
     default_session_path,
+    external_login_automated,
     external_login_browser,
     external_login_manual,
     load_session,
@@ -452,11 +453,31 @@ def create_onleihe_client(config: AppConfig) -> OnleiheClient:
 def login(client: OnleiheClient, config: AppConfig) -> None:
     if config.credentials.auth_type == "open_id":
         session_path = config.credentials.session_path or default_session_path(config.config_path)
-        client.session = load_session(session_path)
-        client.onleihe_id = client.session.onleihe_id or client.onleihe_id
-        client.library_id = client.session.library_id or client.library_id
-        client.refresh()
-        return
+        try:
+            client.session = load_session(session_path)
+            client.onleihe_id = client.session.onleihe_id or client.onleihe_id
+            client.library_id = client.session.library_id or client.library_id
+            client.refresh()
+            return
+        except OnleiheAuthError:
+            if config.external_auth.auto_login:
+                logger.warning(
+                    "OIDC session invalid or expired; attempting automated login."
+                )
+                new_session = external_login_automated(
+                    client,
+                    username=config.external_auth.username,
+                    password=config.external_auth.password,
+                    headless=config.external_auth.headless,
+                    timeout_secs=config.external_auth.timeout_secs,
+                )
+                client.session = new_session
+                client.onleihe_id = new_session.onleihe_id or client.onleihe_id
+                client.library_id = new_session.library_id or client.library_id
+                if client.session_callback is not None:
+                    client.session_callback(new_session)
+                return
+            raise
     client.login(
         config.credentials.username,
         config.credentials.password,
