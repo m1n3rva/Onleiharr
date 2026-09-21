@@ -64,6 +64,7 @@ include = [
 addopts = "-ra"
 testpaths = ["tests"]
 markers = [
+  "browser: tests that require a real browser (Playwright Chromium)",
   "private_live: live non-invasive tests that require credentials",
   "invasive_live: live tests that may mutate account state and must be explicitly enabled",
 ]
