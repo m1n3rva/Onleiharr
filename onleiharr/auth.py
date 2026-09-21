@@ -101,6 +101,7 @@ def _run_external_login_browser(
     login_handler: Callable[[_PageLike], None] | None = None,
     *,
     client: OnleiheClient | None = None,
+    _capture_callback_url: str | None = None,
 ) -> SessionState:
     if sync_playwright is None:
         raise OnleiheAuthError(
@@ -148,6 +149,12 @@ def _run_external_login_browser(
                     raise OnleiheAuthError(
                         f"External login handler failed: {exc}"
                     ) from exc
+            if _capture_callback_url:
+                try:
+                    page.wait_for_url(_capture_callback_url, timeout=timeout_secs * 1000)
+                    callback_url = page.url
+                except Exception:
+                    pass
             while callback_url is None and time.monotonic() < deadline:
                 page.wait_for_timeout(200)
     finally:
