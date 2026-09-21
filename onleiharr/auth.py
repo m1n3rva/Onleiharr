@@ -12,6 +12,7 @@ from typing import Callable, Protocol
 from urllib.parse import parse_qs, urlparse
 
 from onleiharr._vendor.onleihe import OnleiheAuthError, OnleiheClient, SessionState
+from onleiharr.external_auth import get_login_handler
 
 try:
     from playwright.sync_api import sync_playwright
@@ -225,5 +226,44 @@ def external_login_browser(
         headless=False,
         timeout_secs=timeout_secs,
         login_handler=None,
+        client=client,
+    )
+
+
+def external_login_automated(
+    client: OnleiheClient,
+    *,
+    username: str,
+    password: str,
+    headless: bool = True,
+    timeout_secs: float = 120.0,
+) -> SessionState:
+    """Perform exactly one unattended OIDC login for a supported provider.
+
+    Selects a handler by hostname only.  If no handler exists for the
+    provider, raises ``OnleiheAuthError`` before launching a browser.
+    """
+    authorization_url, redirect_url, expected_state = _external_login_request(client)
+
+    handler = get_login_handler(authorization_url)
+    if handler is None:
+        try:
+            parsed_hostname = urlparse(authorization_url).hostname or "unknown"
+        except Exception:
+            parsed_hostname = "unknown"
+        raise OnleiheAuthError(
+            f"Automated login is not supported for provider: {parsed_hostname}"
+        )
+
+    def _handler(page: object) -> None:
+        handler(page, username=username, password=password)
+
+    return _run_external_login_browser(
+        authorization_url,
+        redirect_url,
+        expected_state,
+        headless=headless,
+        timeout_secs=timeout_secs,
+        login_handler=_handler,
         client=client,
     )
