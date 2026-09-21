@@ -2706,15 +2706,13 @@ library_id = "test-library-id"
 
 [external_auth]
 auto_login = true
-username_file = "/tmp/username.txt"
-password_file = "/tmp/password.txt"
+username = "testuser"
+password = "testpass"
 
 [notification]
 urls = []
 """
     config_path.write_text(config_text)
-    Path("/tmp/username.txt").write_text("testuser\n")
-    Path("/tmp/password.txt").write_text("testpass\n")
 
     args = ["--login", "-c", str(config_path)]
 
@@ -2855,15 +2853,13 @@ library_id = "test-library-id"
 
 [external_auth]
 auto_login = true
-username_file = "/tmp/username_secret.txt"
-password_file = "/tmp/password_secret.txt"
+username = "super-secret-user"
+password = "super-secret-pass"
 
 [notification]
 urls = []
 """
     config_path.write_text(config_text)
-    Path("/tmp/username_secret.txt").write_text("super-secret-user\n")
-    Path("/tmp/password_secret.txt").write_text("super-secret-pass\n")
 
     args = ["--login", "-c", str(config_path)]
 

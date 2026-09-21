@@ -301,17 +301,12 @@ auto_login = true
     assert config.external_auth.password == "ext-pass"
 
 
-def test_external_auth_enabled_with_secret_files(tmp_path: Path):
-    username_file = tmp_path / "username.txt"
-    username_file.write_text("file-user\n", encoding="utf-8")
-    password_file = tmp_path / "password.txt"
-    password_file.write_text("file-pass\n", encoding="utf-8")
-
-    body = _open_id_config() + f"""
+def test_external_auth_enabled_with_direct_strings(tmp_path: Path):
+    body = _open_id_config() + """
 [external_auth]
 auto_login = true
-username_file = "{username_file}"
-password_file = "{password_file}"
+username = "file-user"
+password = "file-pass"
 """
     config = load_config(write_config(tmp_path, body))
 
@@ -320,66 +315,44 @@ password_file = "{password_file}"
     assert config.external_auth.password == "file-pass"
 
 
-def test_external_auth_relative_secret_paths_resolve_to_config_dir(tmp_path: Path):
-    secrets_dir = tmp_path / "secrets"
-    secrets_dir.mkdir()
-    username_file = secrets_dir / "username.txt"
-    username_file.write_text("rel-user\n", encoding="utf-8")
-    password_file = secrets_dir / "password.txt"
-    password_file.write_text("rel-pass\n", encoding="utf-8")
+def test_external_auth_env_overrides_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ONLEIHARR_EXTERNAL_USERNAME", "env-user")
+    monkeypatch.setenv("ONLEIHARR_EXTERNAL_PASSWORD", "env-pass")
 
     body = _open_id_config() + """
 [external_auth]
 auto_login = true
-username_file = "secrets/username.txt"
-password_file = "secrets/password.txt"
-"""
-    config = load_config(write_config(tmp_path, body))
-
-    assert config.external_auth.username == "rel-user"
-    assert config.external_auth.password == "rel-pass"
-
-
-def test_external_auth_env_file_path_overrides_toml_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    toml_username = tmp_path / "toml_user.txt"
-    toml_username.write_text("toml-user\n", encoding="utf-8")
-    env_username = tmp_path / "env_user.txt"
-    env_username.write_text("env-user\n", encoding="utf-8")
-    password_file = tmp_path / "password.txt"
-    password_file.write_text("pass\n", encoding="utf-8")
-
-    monkeypatch.setenv("ONLEIHARR_EXTERNAL_USERNAME_FILE", str(env_username))
-
-    body = _open_id_config() + f"""
-[external_auth]
-auto_login = true
-username_file = "{toml_username}"
-password_file = "{password_file}"
+username = "toml-user"
+password = "toml-pass"
 """
     config = load_config(write_config(tmp_path, body))
 
     assert config.external_auth.username == "env-user"
+    assert config.external_auth.password == "env-pass"
 
 
-def test_external_auth_mixed_direct_and_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ONLEIHARR_EXTERNAL_USERNAME", "direct-user")
+def test_external_auth_partial_env_uses_toml_for_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ONLEIHARR_EXTERNAL_USERNAME", "env-user")
 
     body = _open_id_config() + """
 [external_auth]
 auto_login = true
-password_file = "/tmp/fake-pass.txt"
+username = "toml-user"
+password = "toml-pass"
 """
-    with pytest.raises(ConfigError, match="cannot mix"):
-        load_config(write_config(tmp_path, body))
+    config = load_config(write_config(tmp_path, body))
+
+    assert config.external_auth.username == "env-user"
+    assert config.external_auth.password == "toml-pass"
 
 
 def test_external_auth_username_without_password_raises(tmp_path: Path):
     body = _open_id_config() + """
 [external_auth]
 auto_login = true
-username_file = "/tmp/fake-user.txt"
+username = "only-user"
 """
-    with pytest.raises(ConfigError, match="both username_file and password_file"):
+    with pytest.raises(ConfigError, match="both username and password"):
         load_config(write_config(tmp_path, body))
 
 
@@ -387,74 +360,23 @@ def test_external_auth_password_without_username_raises(tmp_path: Path):
     body = _open_id_config() + """
 [external_auth]
 auto_login = true
-password_file = "/tmp/fake-pass.txt"
+password = "only-pass"
 """
-    with pytest.raises(ConfigError, match="both username_file and password_file"):
+    with pytest.raises(ConfigError, match="both username and password"):
         load_config(write_config(tmp_path, body))
 
 
-def test_external_auth_missing_secret_file_raises(tmp_path: Path):
+def test_external_auth_empty_strings_ignored(tmp_path: Path):
     body = _open_id_config() + """
 [external_auth]
-auto_login = true
-username_file = "/tmp/nonexistent_user_12345.txt"
-password_file = "/tmp/nonexistent_pass_12345.txt"
+auto_login = false
+username = ""
+password = "  "
 """
-    with pytest.raises(ConfigError):
-        load_config(write_config(tmp_path, body))
+    config = load_config(write_config(tmp_path, body))
 
-
-def test_external_auth_unreadable_secret_file_raises(tmp_path: Path):
-    username_file = tmp_path / "no_read.txt"
-    username_file.write_text("user\n", encoding="utf-8")
-    username_file.chmod(0o000)
-    password_file = tmp_path / "pass.txt"
-    password_file.write_text("pass\n", encoding="utf-8")
-
-    body = _open_id_config() + f"""
-[external_auth]
-auto_login = true
-username_file = "{username_file}"
-password_file = "{password_file}"
-"""
-    with pytest.raises(ConfigError):
-        load_config(write_config(tmp_path, body))
-
-
-def test_external_auth_empty_secret_file_raises(tmp_path: Path):
-    username_file = tmp_path / "empty.txt"
-    username_file.write_text("", encoding="utf-8")
-    password_file = tmp_path / "pass.txt"
-    password_file.write_text("pass\n", encoding="utf-8")
-
-    body = _open_id_config() + f"""
-[external_auth]
-auto_login = true
-username_file = "{username_file}"
-password_file = "{password_file}"
-"""
-    with pytest.raises(ConfigError):
-        load_config(write_config(tmp_path, body))
-
-
-def test_external_auth_secret_file_content_excluded_from_error(tmp_path: Path, caplog):
-    username_file = tmp_path / "user.txt"
-    username_file.write_text("s3cret\n", encoding="utf-8")
-    password_file = tmp_path / "pass.txt"
-    password_file.write_text("p4ssw0rd\n", encoding="utf-8")
-
-    body = _open_id_config() + f"""
-[external_auth]
-auto_login = true
-username_file = "{username_file}"
-password_file = "/nonexistent_pass_file.txt"
-"""
-    with pytest.raises(ConfigError):
-        load_config(write_config(tmp_path, body))
-
-    for record in caplog.records:
-        assert "s3cret" not in record.message
-        assert "p4ssw0rd" not in record.message
+    assert config.external_auth.username is None
+    assert config.external_auth.password is None
 
 
 def test_external_auth_timeout_zero_raises(tmp_path: Path):

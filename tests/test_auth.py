@@ -15,6 +15,7 @@ def _make_fake_page(**kwargs):
         "wait_for_timeout": lambda self, ms: None,
         "on": lambda self, event, callback: None,
         "route": lambda self, pattern, callback: setattr(self, "_route_callback", callback),
+        "url": "about:blank",
     }
     defaults.update(kwargs)
 

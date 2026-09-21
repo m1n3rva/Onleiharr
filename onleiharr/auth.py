@@ -156,8 +156,15 @@ def _run_external_login_browser(
                     callback_url = page.url
                 except Exception:
                     pass
+            # Wait for navigation to complete and check page URL for callback
             while callback_url is None and time.monotonic() < deadline:
                 page.wait_for_timeout(200)
+                current_url = page.url
+                parsed = urlparse(current_url)
+                query = parse_qs(parsed.query)
+                if "code" in query or "error" in query:
+                    callback_url = current_url
+                    break
     finally:
         if browser is not None:
             try:

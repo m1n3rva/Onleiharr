@@ -128,7 +128,7 @@ SECTION_KEYS = {
         "lendings_poll_interval_secs",
         "lendings_notify",
     },
-    "external_auth": {"auto_login", "headless", "timeout_secs", "username_file", "password_file"},
+    "external_auth": {"auto_login", "headless", "timeout_secs", "username", "password"},
 }
 WATCH_CATEGORY_KEYS = {
     "description",
@@ -538,23 +538,6 @@ def _load_gourou(section: dict[str, Any], environ: os._Environ[str], *, base: Pa
     )
 
 
-def _read_secret_file(path: Path) -> str:
-    try:
-        content = path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise ConfigError(f"Secret file not found: {path}") from exc
-    except PermissionError as exc:
-        raise ConfigError(f"Cannot read secret file: {path}") from exc
-    except OSError as exc:
-        raise ConfigError(f"Cannot read secret file: {path}") from exc
-    cleaned = content
-    if cleaned.endswith("\n"):
-        cleaned = cleaned[:-1]
-    if cleaned.endswith("\r"):
-        cleaned = cleaned[:-1]
-    return cleaned
-
-
 def _load_external_auth(
     section: dict[str, Any], environ: os._Environ[str], *, base: Path
 ) -> ExternalAuthConfig:
@@ -565,66 +548,17 @@ def _load_external_auth(
     if timeout_secs <= 0:
         raise ConfigError("external_auth.timeout_secs must be greater than zero.")
 
-    toml_username_file = section.get("username_file")
-    toml_password_file = section.get("password_file")
+    toml_username = section.get("username")
+    toml_password = section.get("password")
 
     env_username = environ.get("ONLEIHARR_EXTERNAL_USERNAME")
     env_password = environ.get("ONLEIHARR_EXTERNAL_PASSWORD")
-    env_username_file = environ.get("ONLEIHARR_EXTERNAL_USERNAME_FILE")
-    env_password_file = environ.get("ONLEIHARR_EXTERNAL_PASSWORD_FILE")
 
-    username_file = env_username_file or toml_username_file
-    password_file = env_password_file or toml_password_file
+    username = env_username if env_username is not None else toml_username
+    password = env_password if env_password is not None else toml_password
 
-    has_direct_username = env_username is not None and str(env_username).strip()
-    has_direct_password = env_password is not None and str(env_password).strip()
-    has_file_username = username_file is not None
-    has_file_password = password_file is not None
-
-    if has_direct_username and has_file_username:
-        raise ConfigError(
-            "external_auth: cannot mix direct username and username_file."
-        )
-    if has_direct_password and has_file_password:
-        raise ConfigError(
-            "external_auth: cannot mix direct password and password_file."
-        )
-
-    direct_mode = has_direct_username or has_direct_password
-    file_mode = has_file_username or has_file_password
-
-    if direct_mode and not file_mode:
-        if not (has_direct_username and has_direct_password):
-            raise ConfigError(
-                "external_auth: both ONLEIHARR_EXTERNAL_USERNAME and "
-                "ONLEIHARR_EXTERNAL_PASSWORD must be set."
-            )
-        username = str(env_username).strip()
-        password = str(env_password).strip()
-    elif file_mode and not direct_mode:
-        if not (has_file_username and has_file_password):
-            raise ConfigError(
-                "external_auth: both username_file and password_file must be set."
-            )
-        resolved_username = _resolve_optional_path_value(str(username_file), base=base)
-        resolved_password = _resolve_optional_path_value(str(password_file), base=base)
-        if resolved_username is None or resolved_password is None:
-            raise ConfigError(
-                "external_auth: both username_file and password_file must be set."
-            )
-        username = _read_secret_file(resolved_username)
-        password = _read_secret_file(resolved_password)
-        if not username:
-            raise ConfigError(f"Secret file is empty: {resolved_username}")
-        if not password:
-            raise ConfigError(f"Secret file is empty: {resolved_password}")
-    elif direct_mode and file_mode:
-        raise ConfigError(
-            "external_auth: cannot mix direct credentials and file credentials."
-        )
-    else:
-        username = None
-        password = None
+    username = _optional_str(username)
+    password = _optional_str(password)
 
     if auto_login and (not username or not password):
         raise ConfigError(
