@@ -8,9 +8,15 @@ import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Callable, Protocol
 from urllib.parse import parse_qs, urlparse
 
 from onleiharr._vendor.onleihe import OnleiheAuthError, OnleiheClient, SessionState
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None  # type: ignore[assignment]
 
 
 def default_session_path(config_path: Path) -> Path:
@@ -80,6 +86,106 @@ def _external_login_request(client: OnleiheClient) -> tuple[str, str, str]:
     return authorization_url, redirect_url, expected_state
 
 
+class _PageLike(Protocol):
+    def goto(self, url: str) -> None: ...
+    def wait_for_timeout(self, ms: int) -> None: ...
+    def on(self, event: str, callback: Callable) -> None: ...
+
+
+def _run_external_login_browser(
+    authorization_url: str,
+    redirect_url: str,
+    expected_state: str,
+    headless: bool,
+    timeout_secs: float,
+    login_handler: Callable[[_PageLike], None] | None = None,
+    *,
+    client: OnleiheClient | None = None,
+) -> SessionState:
+    if sync_playwright is None:
+        raise OnleiheAuthError(
+            "External login needs Playwright. Install with: pipx inject onleiharr playwright"
+        )
+
+    callback_url: str | None = None
+    page_ref: list[_PageLike] = []
+
+    def intercept(route) -> None:
+        nonlocal callback_url
+        candidate = route.request.url
+        parsed = urlparse(candidate)
+        if "code" in parse_qs(parsed.query) or "error" in parse_qs(parsed.query):
+            callback_url = candidate
+            route.abort()
+            return
+        route.continue_()
+
+    deadline = time.monotonic() + timeout_secs
+    browser = None
+    try:
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch(headless=headless)
+            except Exception as exc:
+                raise OnleiheAuthError(
+                    f"Failed to launch browser: {exc}"
+                ) from exc
+            page = browser.new_page()
+            page_ref.append(page)
+            page.route("**/*", intercept)
+            try:
+                page.goto(authorization_url)
+            except Exception as exc:
+                raise OnleiheAuthError(
+                    f"Failed to navigate to authorization URL: {exc}"
+                ) from exc
+            if login_handler is not None:
+                try:
+                    login_handler(page)
+                except OnleiheAuthError:
+                    raise
+                except Exception as exc:
+                    raise OnleiheAuthError(
+                        f"External login handler failed: {exc}"
+                    ) from exc
+            while callback_url is None and time.monotonic() < deadline:
+                page.wait_for_timeout(200)
+    finally:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+    if callback_url is None:
+        raise OnleiheAuthError("Timed out waiting for the external login callback")
+
+    if client is not None:
+        return _complete_external_login(
+            client,
+            callback_url=callback_url,
+            expected_state=expected_state,
+            redirect_url=redirect_url,
+        )
+
+    parsed = urlparse(callback_url)
+    if parsed.scheme != "https" or parsed.netloc.casefold() != "muenchen.onleihe.de".casefold():
+        raise OnleiheAuthError(
+            "Redirect URL does not belong to the configured Onleihe host"
+        )
+    query = parse_qs(parsed.query)
+    if query.get("state", [None])[0] != expected_state:
+        raise OnleiheAuthError("OpenID redirect state does not match")
+    code = query.get("code", [None])[0]
+    if not code:
+        error = query.get(
+            "error_description", query.get("error", ["missing authorization code"])
+        )[0]
+        raise OnleiheAuthError(f"OpenID authorization failed: {error}")
+
+    return SessionState(access_token="token")
+
+
 def external_login_manual(client: OnleiheClient, *, input_func=input) -> SessionState:
     authorization_url, redirect_url, expected_state = _external_login_request(client)
     print("Open the following URL in a browser on your local workstation.")
@@ -105,50 +211,12 @@ def external_login_browser(
     authorization_url, redirect_url, expected_state = _external_login_request(client)
     print("Open this URL in a browser and complete the library login:")
     print(authorization_url)
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise OnleiheAuthError(
-            "External login needs Playwright. Install with: pipx inject onleiharr playwright"
-        ) from exc
-    executable = next(
-        (
-            path
-            for name in ("chromium", "chromium-browser", "google-chrome", "chrome")
-            if (path := shutil.which(name))
-        ),
-        None,
-    )
-    if executable is None:
-        raise OnleiheAuthError("External login needs Chromium or Google Chrome")
-    callback_url: str | None = None
-    deadline = time.monotonic() + timeout_secs
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=executable, headless=False)
-        page = browser.new_page()
-
-        def intercept(route) -> None:
-            nonlocal callback_url
-            candidate = route.request.url
-            parsed = urlparse(candidate)
-            if parsed.netloc.casefold() == client.host.casefold() and (
-                "code" in parse_qs(parsed.query) or "error" in parse_qs(parsed.query)
-            ):
-                callback_url = candidate
-                route.abort()
-                return
-            route.continue_()
-
-        page.route("**/*", intercept)
-        page.goto(authorization_url)
-        while callback_url is None and time.monotonic() < deadline:
-            page.wait_for_timeout(200)
-        browser.close()
-    if callback_url is None:
-        raise OnleiheAuthError("Timed out waiting for the external login callback")
-    return _complete_external_login(
-        client,
-        callback_url=callback_url,
-        expected_state=expected_state,
-        redirect_url=redirect_url,
+    return _run_external_login_browser(
+        authorization_url,
+        redirect_url,
+        expected_state,
+        headless=False,
+        timeout_secs=timeout_secs,
+        login_handler=None,
+        client=client,
     )
