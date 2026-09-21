@@ -2542,3 +2542,362 @@ def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
             failed_operation="watch poll",
             recovery_already_attempted=False,
         )
+
+
+def test_login_command_uses_manual_flow(monkeypatch, capsys):
+    from onleiharr.auth import external_login_manual
+    from onleiharr.cli import main as cli_main
+    from onleiharr._vendor.onleihe import SessionState
+
+    login_calls = []
+
+    def fake_external_login_manual(client):
+        login_calls.append(("manual", client))
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    def fake_external_login_browser(client):
+        login_calls.append(("browser", client))
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr("onleiharr.cli.external_login_manual", fake_external_login_manual)
+    monkeypatch.setattr("onleiharr.cli.external_login_browser", fake_external_login_browser)
+
+    config_path = Path("/tmp/test_config.toml")
+    config_text = """
+[general]
+poll_interval_secs = 300
+
+[credentials]
+auth_type = "open_id"
+host = "example.onleihe.de"
+onleihe_id = "test-onleihe-id"
+library_id = "test-library-id"
+
+[notification]
+urls = []
+"""
+    config_path.write_text(config_text)
+
+    args = ["--login", "-c", str(config_path)]
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    class FakeStdout:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", FakeStdin())
+    monkeypatch.setattr("sys.stdout", FakeStdout())
+
+    def fake_create_onleihe_client(config):
+        class FakeClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return FakeClient()
+
+    monkeypatch.setattr("onleiharr.cli.create_onleihe_client", fake_create_onleihe_client)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr("onleiharr.cli.save_session", fake_save_session)
+
+    result = cli_main(args)
+
+    assert result == 0
+    assert len(login_calls) == 1
+    assert login_calls[0][0] == "manual"
+
+
+def test_login_browser_command_uses_browser_flow(monkeypatch, capsys):
+    from onleiharr.cli import main as cli_main
+    from onleiharr._vendor.onleihe import SessionState
+
+    login_calls = []
+
+    def fake_external_login_manual(client):
+        login_calls.append(("manual", client))
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    def fake_external_login_browser(client):
+        login_calls.append(("browser", client))
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr("onleiharr.cli.external_login_manual", fake_external_login_manual)
+    monkeypatch.setattr("onleiharr.cli.external_login_browser", fake_external_login_browser)
+
+    config_path = Path("/tmp/test_config_browser.toml")
+    config_text = """
+[general]
+poll_interval_secs = 300
+
+[credentials]
+auth_type = "open_id"
+host = "example.onleihe.de"
+onleihe_id = "test-onleihe-id"
+library_id = "test-library-id"
+
+[notification]
+urls = []
+"""
+    config_path.write_text(config_text)
+
+    args = ["--login", "--login-browser", "-c", str(config_path)]
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    class FakeStdout:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", FakeStdin())
+    monkeypatch.setattr("sys.stdout", FakeStdout())
+
+    def fake_create_onleihe_client(config):
+        class FakeClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return FakeClient()
+
+    monkeypatch.setattr("onleiharr.cli.create_onleihe_client", fake_create_onleihe_client)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr("onleiharr.cli.save_session", fake_save_session)
+
+    result = cli_main(args)
+
+    assert result == 0
+    assert len(login_calls) == 1
+    assert login_calls[0][0] == "browser"
+
+
+def test_login_command_never_uses_automated_flow(monkeypatch, capsys):
+    from onleiharr.cli import main as cli_main
+    from onleiharr._vendor.onleihe import SessionState
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr("onleiharr.cli.external_login_automated", fake_external_login_automated)
+
+    config_path = Path("/tmp/test_config_auto.toml")
+    config_text = """
+[general]
+poll_interval_secs = 300
+
+[credentials]
+auth_type = "open_id"
+host = "example.onleihe.de"
+onleihe_id = "test-onleihe-id"
+library_id = "test-library-id"
+
+[external_auth]
+auto_login = true
+username_file = "/tmp/username.txt"
+password_file = "/tmp/password.txt"
+
+[notification]
+urls = []
+"""
+    config_path.write_text(config_text)
+    Path("/tmp/username.txt").write_text("testuser\n")
+    Path("/tmp/password.txt").write_text("testpass\n")
+
+    args = ["--login", "-c", str(config_path)]
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    class FakeStdout:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", FakeStdin())
+    monkeypatch.setattr("sys.stdout", FakeStdout())
+
+    def fake_external_login_manual(client):
+        return SessionState(access_token="tok", refresh_token="ref", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr("onleiharr.cli.external_login_manual", fake_external_login_manual)
+
+    def fake_create_onleihe_client(config):
+        class FakeClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return FakeClient()
+
+    monkeypatch.setattr("onleiharr.cli.create_onleihe_client", fake_create_onleihe_client)
+
+    def fake_save_session(path, session):
+        pass
+
+    monkeypatch.setattr("onleiharr.cli.save_session", fake_save_session)
+
+    result = cli_main(args)
+
+    assert result == 0
+    assert len(auto_login_calls) == 0
+
+
+def test_upa_startup_does_not_import_playwright(monkeypatch, capsys):
+    from onleiharr.cli import main as cli_main
+
+    config_path = Path("/tmp/test_config_upa.toml")
+    config_text = """
+[general]
+poll_interval_secs = 300
+
+[credentials]
+auth_type = "upa"
+host = "example.onleihe.de"
+username = "upauser"
+password = "upapass"
+onleihe_id = "test-onleihe-id"
+library_id = "test-library-id"
+
+[notification]
+urls = []
+"""
+    config_path.write_text(config_text)
+
+    args = ["-c", str(config_path), "--once"]
+
+    playwright_imported = []
+
+    original_sync_playwright = None
+
+    def fake_sync_playwright():
+        playwright_imported.append(True)
+        raise RuntimeError("Playwright should not be imported for UPA")
+
+    try:
+        import playwright.sync_api
+        original_sync_playwright = playwright.sync_api.sync_playwright
+    except ImportError:
+        pass
+
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", fake_sync_playwright)
+
+    def fake_create_onleihe_client(config):
+        class FakeClient:
+            closed = False
+            onleihe_id = None
+            library_id = None
+            session = None
+            session_callback = None
+
+            def close(self):
+                self.closed = True
+
+            def maintenance_active(self):
+                return False
+
+            def login(self, username, password, **kwargs):
+                pass
+
+        return FakeClient()
+
+    monkeypatch.setattr("onleiharr.cli.create_onleihe_client", fake_create_onleihe_client)
+
+    def fake_login(client, config):
+        pass
+
+    monkeypatch.setattr("onleiharr.cli.login", fake_login)
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        return cli.WatchPollResult(media=[])
+
+    monkeypatch.setattr("onleiharr.cli.fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    monkeypatch.setattr("onleiharr.cli.build_apprise", lambda config: None)
+    monkeypatch.setattr("onleiharr.cli.build_gourou_client", lambda config: None)
+    monkeypatch.setattr(
+        "onleiharr.cli.time",
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda secs: None),
+    )
+
+    result = cli_main(args)
+
+    assert result == 0
+    assert len(playwright_imported) == 0
+
+
+def test_errors_and_logs_contain_no_secrets(monkeypatch, capsys):
+    from onleiharr.cli import main as cli_main
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+
+    config_path = Path("/tmp/test_config_secrets.toml")
+    config_text = """
+[general]
+poll_interval_secs = 300
+
+[credentials]
+auth_type = "open_id"
+host = "example.onleihe.de"
+onleihe_id = "test-onleihe-id"
+library_id = "test-library-id"
+
+[external_auth]
+auto_login = true
+username_file = "/tmp/username_secret.txt"
+password_file = "/tmp/password_secret.txt"
+
+[notification]
+urls = []
+"""
+    config_path.write_text(config_text)
+    Path("/tmp/username_secret.txt").write_text("super-secret-user\n")
+    Path("/tmp/password_secret.txt").write_text("super-secret-pass\n")
+
+    args = ["--login", "-c", str(config_path)]
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    class FakeStdout:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", FakeStdin())
+    monkeypatch.setattr("sys.stdout", FakeStdout())
+
+    def fake_external_login_manual(client):
+        raise OnleiheAuthError("authentication failed")
+
+    monkeypatch.setattr("onleiharr.cli.external_login_manual", fake_external_login_manual)
+
+    def fake_create_onleihe_client(config):
+        class FakeClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return FakeClient()
+
+    monkeypatch.setattr("onleiharr.cli.create_onleihe_client", fake_create_onleihe_client)
+
+    with pytest.raises(OnleiheAuthError, match="authentication failed"):
+        cli_main(args)
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    assert "super-secret-user" not in combined
+    assert "super-secret-pass" not in combined
