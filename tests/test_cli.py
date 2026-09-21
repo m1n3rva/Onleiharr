@@ -558,6 +558,7 @@ def test_run_loop_checks_maintenance_after_poll_error_and_retries(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -606,6 +607,7 @@ def test_run_loop_retries_startup_error_during_maintenance(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -654,6 +656,7 @@ def test_run_loop_recovers_upa_authentication_once(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -675,7 +678,7 @@ def test_run_loop_recovers_upa_authentication_once(monkeypatch):
     assert client.closed is True
 
 
-def test_run_loop_exits_after_second_auth_failure_in_retried_cycle(monkeypatch):
+def test_run_loop_exits_after_five_auth_failures_in_retried_cycle(monkeypatch):
     class Client:
         closed = False
 
@@ -693,6 +696,7 @@ def test_run_loop_exits_after_second_auth_failure_in_retried_cycle(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -709,7 +713,7 @@ def test_run_loop_exits_after_second_auth_failure_in_retried_cycle(monkeypatch):
     with pytest.raises(OnleiheAuthError):
         cli.run_loop(config, SimpleNamespace(test_notification=False, once=True))
 
-    assert calls == ["login", "fetch", "login", "fetch"]
+    assert calls == ["login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch"]
     assert client.closed is True
 
 
@@ -735,6 +739,7 @@ def test_run_loop_resets_auth_recovery_after_successful_cycle(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -784,6 +789,7 @@ def test_run_loop_propagates_failed_upa_relogin(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -831,7 +837,7 @@ def test_run_loop_keeps_open_id_manual_recovery(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -937,6 +943,7 @@ def test_run_loop_keeps_healthy_watches_active_and_primes_recovered_watch(monkey
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
     monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
@@ -1004,6 +1011,7 @@ def test_run_loop_retries_transient_media_handling_error(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
     monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
@@ -1077,6 +1085,7 @@ def test_run_loop_retries_notification_without_repeating_lend(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
     monkeypatch.setattr(cli, "build_apprise", lambda config: object())
     monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
@@ -1818,7 +1827,7 @@ def test_login_openid_valid_session_refresh_succeeds_without_browser(monkeypatch
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="u", password="p"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="u", password="p", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -1845,7 +1854,7 @@ def test_login_openid_missing_session_triggers_auto_login(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -1896,7 +1905,7 @@ def test_login_openid_disabled_auto_login_preserves_error(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -1922,7 +1931,7 @@ def test_login_openid_auto_login_failure_preserves_original_error(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -1953,7 +1962,7 @@ def test_login_openid_corrupt_session_triggers_auto_login(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -1999,7 +2008,7 @@ def test_login_openid_refresh_failure_triggers_auto_login(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id", session_path=None),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -2056,7 +2065,7 @@ def test_login_openid_run_loop_sends_manual_notification_after_auto_login_failur
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -2113,7 +2122,7 @@ def test_login_upa_unchanged(monkeypatch):
             library_id="library-id",
             session_path=None,
         ),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
     cli_login(client, config)
@@ -2138,14 +2147,14 @@ def test_recover_authentication_upa_first_failure_succeeds(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="upa"),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     result = recover_authentication(
         client,
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=False,
+        login_attempts=0,
     )
 
     assert result is True
@@ -2165,14 +2174,14 @@ def test_recover_authentication_upa_second_failure_returns_false(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="upa"),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     result = recover_authentication(
-        client,
+        SimpleNamespace(session_callback=None),
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=True,
+        login_attempts=5,
     )
 
     assert result is False
@@ -2184,14 +2193,14 @@ def test_recover_authentication_upa_non_upa_returns_false(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id"),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     result = recover_authentication(
         SimpleNamespace(session_callback=None),
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=False,
+        login_attempts=0,
     )
 
     assert result is False
@@ -2217,14 +2226,14 @@ def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id"),
-        external_auth=SimpleNamespace(auto_login=True, headless=False, timeout_secs=60.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=False, timeout_secs=60.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
     result = recover_authentication(
         client,
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=False,
+        login_attempts=0,
     )
 
     assert result is True
@@ -2240,14 +2249,14 @@ def test_recover_authentication_oidc_auto_login_disabled_returns_false(monkeypat
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id"),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
     )
 
     result = recover_authentication(
         SimpleNamespace(),
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=False,
+        login_attempts=0,
     )
 
     assert result is False
@@ -2267,14 +2276,14 @@ def test_recover_authentication_oidc_second_failure_returns_false(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id"),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
     result = recover_authentication(
         SimpleNamespace(),
         config,
         failed_operation="watch poll",
-        recovery_already_attempted=True,
+        login_attempts=5,
     )
 
     assert result is False
@@ -2318,7 +2327,7 @@ def test_run_loop_oidc_auto_login_recovery_on_watch_poll(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -2382,7 +2391,7 @@ def test_run_loop_oidc_auto_login_second_auth_failure_exits(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -2427,7 +2436,7 @@ def test_run_loop_oidc_auto_login_disabled_preserves_manual_recovery(monkeypatch
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -2490,7 +2499,7 @@ def test_run_loop_oidc_auto_login_reset_after_successful_cycle(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
         config_path=Path("/tmp/test.toml"),
     )
 
@@ -2532,7 +2541,7 @@ def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
 
     config = SimpleNamespace(
         credentials=SimpleNamespace(auth_type="open_id"),
-        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
     with pytest.raises(OnleiheAuthError, match="browser login failed"):
@@ -2541,6 +2550,151 @@ def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
             config,
             failed_operation="watch poll",
             recovery_already_attempted=False,
+        )
+
+
+def test_recover_authentication_oidc_max_login_attempts_exceeded(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError
+    from onleiharr.cli import recover_authentication
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        raise OnleiheAuthError("browser login failed")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        login_attempts=5,
+    )
+
+    assert result is False
+
+
+def test_recover_authentication_oidc_max_login_attempts_succeeds_before_limit(monkeypatch):
+    from onleiharr._vendor.onleihe import SessionState
+    from onleiharr.cli import recover_authentication
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(session_callback=None),
+        config,
+        failed_operation="watch poll",
+        login_attempts=4,
+    )
+
+    assert result is True
+    assert len(auto_login_calls) == 1
+
+
+def test_recover_authentication_upa_max_login_attempts_exceeded(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    login_calls = []
+
+    def fake_login(client, config):
+        login_calls.append(True)
+
+    monkeypatch.setattr(cli, "login", fake_login)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="upa"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        login_attempts=5,
+    )
+
+    assert result is False
+    assert len(login_calls) == 0
+
+
+def test_recover_authentication_upa_max_login_attempts_succeeds_before_limit(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    login_calls = []
+
+    def fake_login(client, config):
+        login_calls.append(True)
+
+    monkeypatch.setattr(cli, "login", fake_login)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="upa"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        login_attempts=4,
+    )
+
+    assert result is True
+    assert len(login_calls) == 1
+
+
+def test_recover_authentication_oidc_disabled_still_returns_false(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        login_attempts=0,
+    )
+
+    assert result is False
+
+
+def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import recover_authentication
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        raise OnleiheAuthError("browser login failed")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
+    )
+
+    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+        recover_authentication(
+            SimpleNamespace(),
+            config,
+            failed_operation="watch poll",
+            login_attempts=0,
         )
 
 

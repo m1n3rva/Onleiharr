@@ -86,6 +86,7 @@ class ExternalAuthConfig:
     timeout_secs: float = 120.0
     username: str | None = None
     password: str | None = None
+    max_login_attempts: int = 5
 
 
 @dataclass
@@ -128,7 +129,7 @@ SECTION_KEYS = {
         "lendings_poll_interval_secs",
         "lendings_notify",
     },
-    "external_auth": {"auto_login", "headless", "timeout_secs", "username", "password"},
+    "external_auth": {"auto_login", "headless", "timeout_secs", "username", "password", "max_login_attempts"},
 }
 WATCH_CATEGORY_KEYS = {
     "description",
@@ -544,9 +545,13 @@ def _load_external_auth(
     auto_login = bool(section.get("auto_login", False))
     headless = bool(section.get("headless", True))
     timeout_secs = float(section.get("timeout_secs", 120.0))
+    max_login_attempts = int(section.get("max_login_attempts", 5))
 
     if timeout_secs <= 0:
         raise ConfigError("external_auth.timeout_secs must be greater than zero.")
+
+    if max_login_attempts <= 0:
+        raise ConfigError("external_auth.max_login_attempts must be greater than zero.")
 
     toml_username = section.get("username")
     toml_password = section.get("password")
@@ -571,6 +576,7 @@ def _load_external_auth(
         timeout_secs=timeout_secs,
         username=username,
         password=password,
+        max_login_attempts=max_login_attempts,
     )
 
 

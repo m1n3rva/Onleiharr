@@ -493,9 +493,9 @@ def recover_authentication(
     config: AppConfig,
     *,
     failed_operation: str,
-    recovery_already_attempted: bool,
+    login_attempts: int,
 ) -> bool:
-    if recovery_already_attempted:
+    if login_attempts >= config.external_auth.max_login_attempts:
         logger.error(
             "Onleihe authentication failed again during %s before a poll cycle completed.",
             failed_operation,
@@ -1342,6 +1342,8 @@ def initialize_onleihe_session(
     lendings_enabled: bool,
     lendings_interval_secs: float,
 ) -> float | None:
+    max_attempts = config.external_auth.max_login_attempts
+    login_attempts = 0
     while True:
         try:
             login(client, config)
@@ -1383,6 +1385,19 @@ def initialize_onleihe_session(
             ):
                 continue
             raise
+        except OnleiheAuthError:
+            login_attempts += 1
+            if login_attempts >= max_attempts:
+                raise OnleiheAuthError(
+                    f"OIDC automated login failed after {max_attempts} attempts. "
+                    "Your credentials may be invalid or the library's login service may be unavailable. "
+                    "Check your configuration and try again."
+                )
+            logger.warning(
+                "OIDC automated login failed (attempt %d/%d); retrying...",
+                login_attempts,
+                max_attempts,
+            )
 
 
 def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
@@ -1399,7 +1414,7 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
     lendings_interval_secs = float(config.gourou.lendings_poll_interval_secs)
     lendings_enabled = gourou_client is not None and lendings_interval_secs > 0
     lendings_next_check_ts: float | None = None
-    auth_recovery_attempted = False
+    login_attempts = 0
 
     try:
         lendings_next_check_ts = initialize_onleihe_session(
@@ -1420,10 +1435,10 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                     client,
                     config,
                     failed_operation="watch poll",
-                    recovery_already_attempted=auth_recovery_attempted,
+                    login_attempts=login_attempts,
                 ):
                     raise
-                auth_recovery_attempted = True
+                login_attempts += 1
                 continue
             if poll_result.errors and suspend_if_maintenance_active(
                 client,
@@ -1531,10 +1546,10 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                             client,
                             config,
                             failed_operation=f"handling media '{media.title}'",
-                            recovery_already_attempted=auth_recovery_attempted,
+                            login_attempts=login_attempts,
                         ):
                             raise
-                        auth_recovery_attempted = True
+                        login_attempts += 1
                         restart_poll_after_auth_recovery = True
                         break
                     except OnleiheAPIError as exc:
@@ -1568,10 +1583,10 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                         client,
                         config,
                         failed_operation="my-media scan",
-                        recovery_already_attempted=auth_recovery_attempted,
+                        login_attempts=login_attempts,
                     ):
                         raise
-                    auth_recovery_attempted = True
+                    login_attempts += 1
                     continue
                 except OnleiheAPIError as exc:
                     if not suspend_if_maintenance_active(
@@ -1588,7 +1603,7 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                 logger.info("--once set; exiting after first iteration")
                 break
 
-            auth_recovery_attempted = False
+            login_attempts = 0
             time.sleep(config.general.poll_interval_secs)
     except OnleiheAuthError:
         if config.credentials.auth_type == "open_id":
