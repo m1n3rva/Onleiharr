@@ -488,28 +488,49 @@ def login(client: OnleiheClient, config: AppConfig) -> None:
     )
 
 
-def recover_upa_authentication(
+def recover_authentication(
     client: OnleiheClient,
     config: AppConfig,
     *,
     failed_operation: str,
     recovery_already_attempted: bool,
 ) -> bool:
-    if config.credentials.auth_type != "upa":
-        return False
     if recovery_already_attempted:
         logger.error(
             "Onleihe authentication failed again during %s before a poll cycle completed.",
             failed_operation,
         )
         return False
-    logger.warning(
-        "Onleihe authentication expired during %s; attempting a fresh UPA login.",
-        failed_operation,
-    )
-    login(client, config)
-    logger.info("Onleihe UPA login recovered; retrying the poll cycle.")
-    return True
+    if config.credentials.auth_type == "upa":
+        logger.warning(
+            "Onleihe authentication expired during %s; attempting a fresh UPA login.",
+            failed_operation,
+        )
+        login(client, config)
+        logger.info("Onleihe UPA login recovered; retrying the poll cycle.")
+        return True
+    if config.credentials.auth_type == "open_id":
+        if config.external_auth.auto_login:
+            logger.warning(
+                "Onleihe authentication expired during %s; attempting automated OIDC login.",
+                failed_operation,
+            )
+            new_session = external_login_automated(
+                client,
+                username=config.external_auth.username,
+                password=config.external_auth.password,
+                headless=config.external_auth.headless,
+                timeout_secs=config.external_auth.timeout_secs,
+            )
+            client.session = new_session
+            client.onleihe_id = new_session.onleihe_id or client.onleihe_id
+            client.library_id = new_session.library_id or client.library_id
+            if client.session_callback is not None:
+                client.session_callback(new_session)
+            logger.info("Onleihe OIDC login recovered; retrying the poll cycle.")
+            return True
+        return False
+    return False
 
 
 def media_from_item(
@@ -1395,7 +1416,7 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
             try:
                 poll_result = fetch_all_watched_media(client, config, log_summary=first_run)
             except OnleiheAuthError:
-                if not recover_upa_authentication(
+                if not recover_authentication(
                     client,
                     config,
                     failed_operation="watch poll",
@@ -1506,7 +1527,7 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                         )
                         break
                     except OnleiheAuthError:
-                        if not recover_upa_authentication(
+                        if not recover_authentication(
                             client,
                             config,
                             failed_operation=f"handling media '{media.title}'",
@@ -1543,7 +1564,7 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                     )
                     logger.debug("My-media scan handled %d items.", count)
                 except OnleiheAuthError:
-                    if not recover_upa_authentication(
+                    if not recover_authentication(
                         client,
                         config,
                         failed_operation="my-media scan",

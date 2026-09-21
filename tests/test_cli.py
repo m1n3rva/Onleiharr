@@ -815,6 +815,7 @@ def test_run_loop_propagates_failed_upa_relogin(monkeypatch):
 def test_run_loop_keeps_open_id_manual_recovery(monkeypatch):
     class Client:
         closed = False
+        session_callback = None
 
         def close(self):
             self.closed = True
@@ -830,6 +831,7 @@ def test_run_loop_keeps_open_id_manual_recovery(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -2121,3 +2123,422 @@ def test_login_upa_unchanged(monkeypatch):
     assert login_args[0]["password"] == "upapass"
     assert login_args[0]["kwargs"]["onleihe_id"] == "onleihe-id"
     assert login_args[0]["kwargs"]["library_id"] == "library-id"
+
+
+def test_recover_authentication_upa_first_failure_succeeds(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    client = SimpleNamespace()
+    login_calls = []
+
+    def fake_login(client, config):
+        login_calls.append(True)
+
+    monkeypatch.setattr(cli, "login", fake_login)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="upa"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+    )
+
+    result = recover_authentication(
+        client,
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=False,
+    )
+
+    assert result is True
+    assert len(login_calls) == 1
+
+
+def test_recover_authentication_upa_second_failure_returns_false(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    client = SimpleNamespace()
+    login_calls = []
+
+    def fake_login(client, config):
+        login_calls.append(True)
+
+    monkeypatch.setattr(cli, "login", fake_login)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="upa"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+    )
+
+    result = recover_authentication(
+        client,
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=True,
+    )
+
+    assert result is False
+    assert len(login_calls) == 0
+
+
+def test_recover_authentication_upa_non_upa_returns_false(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(session_callback=None),
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=False,
+    )
+
+    assert result is False
+
+
+def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
+    from onleiharr._vendor.onleihe import SessionState
+    from onleiharr.cli import recover_authentication
+
+    client = SimpleNamespace(session_callback=None)
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append({
+            "username": username,
+            "password": password,
+            "headless": headless,
+            "timeout_secs": timeout_secs,
+        })
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=False, timeout_secs=60.0, username="extuser", password="extpass"),
+    )
+
+    result = recover_authentication(
+        client,
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=False,
+    )
+
+    assert result is True
+    assert len(auto_login_calls) == 1
+    assert auto_login_calls[0]["username"] == "extuser"
+    assert auto_login_calls[0]["password"] == "extpass"
+    assert auto_login_calls[0]["headless"] is False
+    assert auto_login_calls[0]["timeout_secs"] == 60.0
+
+
+def test_recover_authentication_oidc_auto_login_disabled_returns_false(monkeypatch):
+    from onleiharr.cli import recover_authentication
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=False,
+    )
+
+    assert result is False
+
+
+def test_recover_authentication_oidc_second_failure_returns_false(monkeypatch):
+    from onleiharr._vendor.onleihe import SessionState
+    from onleiharr.cli import recover_authentication
+
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+    )
+
+    result = recover_authentication(
+        SimpleNamespace(),
+        config,
+        failed_operation="watch poll",
+        recovery_already_attempted=True,
+    )
+
+    assert result is False
+    assert len(auto_login_calls) == 0
+
+
+def test_run_loop_oidc_auto_login_recovery_on_watch_poll(monkeypatch):
+    class EndTestLoop(Exception):
+        pass
+
+    class Client:
+        closed = False
+        onleihe_id = None
+        library_id = None
+        session = None
+        session_callback = None
+
+        def close(self):
+            self.closed = True
+
+        def maintenance_active(self):
+            return False
+
+    client = Client()
+    auto_login_calls = []
+
+    from onleiharr._vendor.onleihe import SessionState
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        general=SimpleNamespace(
+            poll_interval_secs=300.0,
+            watch_product_ids=[],
+            watch_categories=[],
+        ),
+        notification=SimpleNamespace(test_notification=False),
+        gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    monkeypatch.setattr(cli, "build_apprise", lambda config: None)
+    monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
+    monkeypatch.setattr(cli, "build_gourou_client", lambda config: None)
+    monkeypatch.setattr(cli, "login", lambda client, config: None)
+    monkeypatch.setattr(
+        cli,
+        "time",
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda secs: None),
+    )
+
+    fetch_calls = []
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        fetch_calls.append(True)
+        if len(fetch_calls) == 1:
+            from onleiharr._vendor.onleihe import OnleiheAuthError
+            raise OnleiheAuthError("refresh rejected", status_code=401)
+        if len(fetch_calls) >= 3:
+            raise EndTestLoop
+        return cli.WatchPollResult(media=[])
+
+    monkeypatch.setattr(cli, "fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    with pytest.raises(EndTestLoop):
+        cli.run_loop(config, SimpleNamespace(test_notification=False, once=False))
+
+    assert len(auto_login_calls) == 1
+    assert len(fetch_calls) == 3
+    assert client.closed is True
+
+
+def test_run_loop_oidc_auto_login_second_auth_failure_exits(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+
+    class Client:
+        closed = False
+        session_callback = None
+
+        def close(self):
+            self.closed = True
+
+        def maintenance_active(self):
+            return False
+
+    client = Client()
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        general=SimpleNamespace(
+            poll_interval_secs=300.0,
+            watch_product_ids=[],
+            watch_categories=[],
+        ),
+        notification=SimpleNamespace(test_notification=False),
+        gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    monkeypatch.setattr(cli, "build_apprise", lambda config: None)
+    monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
+    monkeypatch.setattr(cli, "build_gourou_client", lambda config: None)
+    monkeypatch.setattr(cli, "login", lambda client, config: None)
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        raise OnleiheAuthError("refresh rejected", status_code=401)
+
+    monkeypatch.setattr(cli, "fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    with pytest.raises(OnleiheAuthError):
+        cli.run_loop(config, SimpleNamespace(test_notification=False, once=True))
+
+    assert client.closed is True
+
+
+def test_run_loop_oidc_auto_login_disabled_preserves_manual_recovery(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+
+    class Client:
+        closed = False
+        session_callback = None
+
+        def close(self):
+            self.closed = True
+
+        def maintenance_active(self):
+            return False
+
+    client = Client()
+    notifications = []
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        general=SimpleNamespace(
+            poll_interval_secs=300.0,
+            watch_product_ids=[],
+            watch_categories=[],
+        ),
+        notification=SimpleNamespace(test_notification=False),
+        gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    monkeypatch.setattr(cli, "build_apprise", lambda config: None)
+    monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
+    monkeypatch.setattr(cli, "build_gourou_client", lambda config: None)
+    monkeypatch.setattr(cli, "login", lambda client, config: None)
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        raise OnleiheAuthError("refresh rejected", status_code=401)
+
+    monkeypatch.setattr(cli, "fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    monkeypatch.setattr(
+        cli,
+        "notify_external_auth_required",
+        lambda apobj, config: notifications.append(config),
+    )
+
+    with pytest.raises(OnleiheAuthError):
+        cli.run_loop(config, SimpleNamespace(test_notification=False, once=True))
+
+    assert notifications == [config]
+    assert client.closed is True
+
+
+def test_run_loop_oidc_auto_login_reset_after_successful_cycle(monkeypatch):
+    class EndTestLoop(Exception):
+        pass
+
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+
+    class Client:
+        closed = False
+        session_callback = None
+
+        def close(self):
+            self.closed = True
+
+        def maintenance_active(self):
+            return False
+
+    client = Client()
+    auto_login_calls = []
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        auto_login_calls.append(True)
+        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    fetch_results = iter(["auth", "success", "auth", "success"])
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id", session_path=None),
+        general=SimpleNamespace(
+            poll_interval_secs=300.0,
+            watch_product_ids=[],
+            watch_categories=[],
+        ),
+        notification=SimpleNamespace(test_notification=False),
+        gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+        config_path=Path("/tmp/test.toml"),
+    )
+
+    monkeypatch.setattr(cli, "build_apprise", lambda config: None)
+    monkeypatch.setattr(cli, "create_onleihe_client", lambda config: client)
+    monkeypatch.setattr(cli, "build_gourou_client", lambda config: None)
+    monkeypatch.setattr(cli, "login", lambda client, config: None)
+    monkeypatch.setattr(
+        cli,
+        "time",
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda secs: None),
+    )
+
+    def fake_fetch_all_watched_media(client, config, *, log_summary=False):
+        try:
+            result = next(fetch_results)
+        except StopIteration:
+            raise EndTestLoop from None
+        if result == "auth":
+            raise OnleiheAuthError("refresh rejected", status_code=401)
+        return cli.WatchPollResult(media=[])
+
+    monkeypatch.setattr(cli, "fetch_all_watched_media", fake_fetch_all_watched_media)
+
+    with pytest.raises(EndTestLoop):
+        cli.run_loop(config, SimpleNamespace(test_notification=False, once=False))
+
+    assert len(auto_login_calls) == 2
+
+
+def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError, SessionState
+    from onleiharr.cli import recover_authentication
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        raise OnleiheAuthError("browser login failed")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass"),
+    )
+
+    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+        recover_authentication(
+            SimpleNamespace(),
+            config,
+            failed_operation="watch poll",
+            recovery_already_attempted=False,
+        )
