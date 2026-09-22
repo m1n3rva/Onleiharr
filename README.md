@@ -61,6 +61,16 @@ Manual config setup:
 - Disable the wizard for scripts/services: `onleiharr --no-wizard`
 - Renew an external-library login: `onleiharr --login`
 
+### Adding your library
+The first-start wizard (or `onleiharr --init-config`) guides you through adding your library:
+
+1. Select your library from the Onleihe v3 API catalog.
+2. Choose your authentication type:
+   - **UPA** (username/password) — most municipal libraries.
+   - **OpenID** — external libraries that redirect to their own identity provider (e.g., Münchner Stadtbibliothek).
+3. Enter your credentials or follow the OpenID flow (see below).
+4. Add product/category watches and configure notifications.
+
 ### External library login (OpenID)
 Libraries such as Münchner Stadtbibliothek redirect authentication to their own identity provider. The wizard detects this through the Onleihe v3 API and prints an authorization URL. Open that URL on a local workstation, disable JavaScript for the login tab so the Onleihe web app cannot consume the one-time code, then paste the complete redirected URL into the SSH terminal. Onleiharr stores only the resulting Onleihe session in a private `session.json`; the library credentials are not written to the config.
 
@@ -70,6 +80,34 @@ No browser is required on the Onleiharr server. As an optional convenience on de
 pipx inject onleiharr playwright
 # Arch Linux: sudo pacman -S chromium
 ```
+
+#### Automated browser login (auto_login)
+For unattended deployments, Onleiharr can automate the browser-based login using credentials stored in the config. Configure the `[external_auth]` section:
+
+```toml
+[external_auth]
+auto_login = true
+username = "your-library-username"
+password = "your-library-password"
+headless = true
+timeout_secs = 120.0
+max_login_attempts = 5
+```
+
+- `auto_login = true` — enables automated login on session expiration.
+- `username` / `password` — your library credentials (not Onleihe credentials).
+- `headless = true` — runs the browser without a GUI (required for headless servers).
+- `timeout_secs` — maximum seconds to wait for the login flow to complete.
+- `max_login_attempts` — max retry attempts before giving up (default: 5).
+
+When the Onleihe session expires or is invalid, Onleiharr attempts automated login up to `max_login_attempts` times. Each failure logs:
+
+```
+WARNING: Onleihe authentication expired during watch poll; attempting automated OIDC login.
+ERROR: Automated OIDC login failed during watch poll (attempt 1/5): browser login failed
+```
+
+If all attempts fail, Onleiharr sends an Apprise notification with the exact `onleiharr --login -c ...` and systemd restart commands, then exits with an authentication error.
 
 The watcher refreshes the cached Onleihe session automatically and atomically persists every renewed token. If the session can no longer be refreshed, Onleiharr sends an Apprise notification containing the exact `onleiharr --login -c ...` and systemd restart commands, then exits with an authentication error.
 
@@ -131,9 +169,17 @@ download_permissions = "0644"
 # remove_drm_ack = "I_UNDERSTAND"
 # lendings_poll_interval_secs = 21600.0
 # lendings_notify = true
+
+[external_auth]
+# auto_login = true
+# username = "your-library-username"
+# password = "your-library-password"
+# headless = true
+# timeout_secs = 120.0
+# max_login_attempts = 5
 ```
 
-For an external-login library, the wizard writes `auth_type = "open_id"` and `session_path = "session.json"` instead of `username` and `password`.
+For an external-login library, the wizard writes `auth_type = "open_id"` and `session_path = "session.json"` instead of `username` and `password`. Enable `[external_auth]` with `auto_login = true` and your library credentials to allow unattended automated browser login on session expiration.
 
 Behavior:
 - `watch_product_ids` are direct product or series watches and do not use keyword filtering.
