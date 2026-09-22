@@ -515,20 +515,30 @@ def recover_authentication(
                 "Onleihe authentication expired during %s; attempting automated OIDC login.",
                 failed_operation,
             )
-            new_session = external_login_automated(
-                client,
-                username=config.external_auth.username,
-                password=config.external_auth.password,
-                headless=config.external_auth.headless,
-                timeout_secs=config.external_auth.timeout_secs,
-            )
-            client.session = new_session
-            client.onleihe_id = new_session.onleihe_id or client.onleihe_id
-            client.library_id = new_session.library_id or client.library_id
-            if client.session_callback is not None:
-                client.session_callback(new_session)
-            logger.info("Onleihe OIDC login recovered; retrying the poll cycle.")
-            return True
+            try:
+                new_session = external_login_automated(
+                    client,
+                    username=config.external_auth.username,
+                    password=config.external_auth.password,
+                    headless=config.external_auth.headless,
+                    timeout_secs=config.external_auth.timeout_secs,
+                )
+                client.session = new_session
+                client.onleihe_id = new_session.onleihe_id or client.onleihe_id
+                client.library_id = new_session.library_id or client.library_id
+                if client.session_callback is not None:
+                    client.session_callback(new_session)
+                logger.info("Onleihe OIDC login recovered; retrying the poll cycle.")
+                return True
+            except OnleiheAuthError as exc:
+                logger.error(
+                    "Automated OIDC login failed during %s (attempt %d/%d): %s",
+                    failed_operation,
+                    login_attempts + 1,
+                    config.external_auth.max_login_attempts,
+                    exc,
+                )
+                raise
         return False
     return False
 

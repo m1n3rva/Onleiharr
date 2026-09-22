@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -2696,6 +2697,35 @@ def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
             failed_operation="watch poll",
             login_attempts=0,
         )
+
+
+def test_recover_authentication_oidc_browser_failure_logs_error(monkeypatch, caplog):
+    from onleiharr._vendor.onleihe import OnleiheAuthError
+    from onleiharr.cli import recover_authentication
+
+    def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
+        raise OnleiheAuthError("browser login failed")
+
+    monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
+
+    config = SimpleNamespace(
+        credentials=SimpleNamespace(auth_type="open_id"),
+        external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
+    )
+
+    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+        recover_authentication(
+            SimpleNamespace(),
+            config,
+            failed_operation="watch poll",
+            login_attempts=0,
+        )
+
+    assert caplog.record_tuples[-1] == (
+        "onleiharr.cli",
+        logging.ERROR,
+        "Automated OIDC login failed during watch poll (attempt 1/5): browser login failed",
+    )
 
 
 def test_login_command_uses_manual_flow(monkeypatch, capsys):
