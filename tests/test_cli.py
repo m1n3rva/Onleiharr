@@ -679,7 +679,7 @@ def test_run_loop_recovers_upa_authentication_once(monkeypatch):
     assert client.closed is True
 
 
-def test_run_loop_exits_after_five_auth_failures_in_retried_cycle(monkeypatch):
+def test_run_loop_upa_exits_after_one_recovery_attempt(monkeypatch):
     class Client:
         closed = False
 
@@ -697,7 +697,7 @@ def test_run_loop_exits_after_five_auth_failures_in_retried_cycle(monkeypatch):
         ),
         notification=SimpleNamespace(test_notification=False),
         gourou=SimpleNamespace(lendings_poll_interval_secs=0.0),
-        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=5),
+        external_auth=SimpleNamespace(auto_login=False, headless=True, timeout_secs=120.0, username=None, password=None, max_login_attempts=99),
     )
 
     monkeypatch.setattr(cli, "build_apprise", lambda config: None)
@@ -714,7 +714,7 @@ def test_run_loop_exits_after_five_auth_failures_in_retried_cycle(monkeypatch):
     with pytest.raises(OnleiheAuthError):
         cli.run_loop(config, SimpleNamespace(test_notification=False, once=True))
 
-    assert calls == ["login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch", "login", "fetch"]
+    assert calls == ["login", "fetch", "login", "fetch"]
     assert client.closed is True
 
 
@@ -1873,7 +1873,10 @@ def test_login_openid_missing_session_triggers_auto_login(monkeypatch):
             "headless": headless,
             "timeout_secs": timeout_secs,
         })
-        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.session = SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.onleihe_id = "oid"
+        client.library_id = "lid"
+        return client.session
 
     monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
 
@@ -1976,7 +1979,10 @@ def test_login_openid_corrupt_session_triggers_auto_login(monkeypatch):
 
     def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
         auto_login_calls.append(True)
-        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.session = SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.onleihe_id = "oid"
+        client.library_id = "lid"
+        return client.session
 
     monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
 
@@ -2022,7 +2028,10 @@ def test_login_openid_refresh_failure_triggers_auto_login(monkeypatch):
 
     def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
         auto_login_calls.append(True)
-        return SessionState(access_token="fresh", refresh_token="fresh-refresh", user_id="uid", profile_id="pid", library_id="new-lid", onleihe_id="new-oid")
+        client.session = SessionState(access_token="fresh", refresh_token="fresh-refresh", user_id="uid", profile_id="pid", library_id="new-lid", onleihe_id="new-oid")
+        client.onleihe_id = "new-oid"
+        client.library_id = "new-lid"
+        return client.session
 
     monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
 
@@ -2158,11 +2167,11 @@ def test_recover_authentication_upa_first_failure_succeeds(monkeypatch):
         login_attempts=0,
     )
 
-    assert result is True
+    assert result == 1
     assert len(login_calls) == 1
 
 
-def test_recover_authentication_upa_second_failure_returns_false(monkeypatch):
+def test_recover_authentication_upa_second_failure_returns_none(monkeypatch):
     from onleiharr.cli import recover_authentication
 
     client = SimpleNamespace()
@@ -2185,11 +2194,11 @@ def test_recover_authentication_upa_second_failure_returns_false(monkeypatch):
         login_attempts=5,
     )
 
-    assert result is False
+    assert result is None
     assert len(login_calls) == 0
 
 
-def test_recover_authentication_upa_non_upa_returns_false(monkeypatch):
+def test_recover_authentication_upa_non_upa_returns_none(monkeypatch):
     from onleiharr.cli import recover_authentication
 
     config = SimpleNamespace(
@@ -2204,7 +2213,7 @@ def test_recover_authentication_upa_non_upa_returns_false(monkeypatch):
         login_attempts=0,
     )
 
-    assert result is False
+    assert result is None
 
 
 def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
@@ -2221,7 +2230,10 @@ def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
             "headless": headless,
             "timeout_secs": timeout_secs,
         })
-        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.session = SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.onleihe_id = "oid"
+        client.library_id = "lid"
+        return client.session
 
     monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
 
@@ -2237,7 +2249,7 @@ def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
         login_attempts=0,
     )
 
-    assert result is True
+    assert result == 1
     assert len(auto_login_calls) == 1
     assert auto_login_calls[0]["username"] == "extuser"
     assert auto_login_calls[0]["password"] == "extpass"
@@ -2245,7 +2257,7 @@ def test_recover_authentication_oidc_auto_login_enabled(monkeypatch):
     assert auto_login_calls[0]["timeout_secs"] == 60.0
 
 
-def test_recover_authentication_oidc_auto_login_disabled_returns_false(monkeypatch):
+def test_recover_authentication_oidc_auto_login_disabled_returns_none(monkeypatch):
     from onleiharr.cli import recover_authentication
 
     config = SimpleNamespace(
@@ -2260,11 +2272,11 @@ def test_recover_authentication_oidc_auto_login_disabled_returns_false(monkeypat
         login_attempts=0,
     )
 
-    assert result is False
+    assert result is None
 
 
-def test_recover_authentication_oidc_second_failure_returns_false(monkeypatch):
-    from onleiharr._vendor.onleihe import SessionState
+def test_recover_authentication_oidc_max_attempts_raises(monkeypatch):
+    from onleiharr._vendor.onleihe import OnleiheAuthError
     from onleiharr.cli import recover_authentication
 
     auto_login_calls = []
@@ -2280,14 +2292,14 @@ def test_recover_authentication_oidc_second_failure_returns_false(monkeypatch):
         external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
-    result = recover_authentication(
-        SimpleNamespace(),
-        config,
-        failed_operation="watch poll",
-        login_attempts=5,
-    )
+    with pytest.raises(OnleiheAuthError, match="OIDC automated login failed after 5 attempts"):
+        recover_authentication(
+            SimpleNamespace(),
+            config,
+            failed_operation="watch poll",
+            login_attempts=5,
+        )
 
-    assert result is False
     assert len(auto_login_calls) == 0
 
 
@@ -2568,14 +2580,13 @@ def test_recover_authentication_oidc_max_login_attempts_exceeded(monkeypatch):
         external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
-    result = recover_authentication(
-        SimpleNamespace(),
-        config,
-        failed_operation="watch poll",
-        login_attempts=5,
-    )
-
-    assert result is False
+    with pytest.raises(OnleiheAuthError, match="OIDC automated login failed after 5 attempts"):
+        recover_authentication(
+            SimpleNamespace(),
+            config,
+            failed_operation="watch poll",
+            login_attempts=5,
+        )
 
 
 def test_recover_authentication_oidc_max_login_attempts_succeeds_before_limit(monkeypatch):
@@ -2586,7 +2597,10 @@ def test_recover_authentication_oidc_max_login_attempts_succeeds_before_limit(mo
 
     def fake_external_login_automated(client, *, username, password, headless, timeout_secs):
         auto_login_calls.append(True)
-        return SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.session = SessionState(access_token="new", refresh_token="newrefresh", user_id="uid", profile_id="pid", library_id="lid", onleihe_id="oid")
+        client.onleihe_id = "oid"
+        client.library_id = "lid"
+        return client.session
 
     monkeypatch.setattr(cli, "external_login_automated", fake_external_login_automated)
 
@@ -2602,7 +2616,7 @@ def test_recover_authentication_oidc_max_login_attempts_succeeds_before_limit(mo
         login_attempts=4,
     )
 
-    assert result is True
+    assert result == 5
     assert len(auto_login_calls) == 1
 
 
@@ -2628,11 +2642,11 @@ def test_recover_authentication_upa_max_login_attempts_exceeded(monkeypatch):
         login_attempts=5,
     )
 
-    assert result is False
+    assert result is None
     assert len(login_calls) == 0
 
 
-def test_recover_authentication_upa_max_login_attempts_succeeds_before_limit(monkeypatch):
+def test_recover_authentication_upa_succeeds_on_first_attempt(monkeypatch):
     from onleiharr.cli import recover_authentication
 
     login_calls = []
@@ -2651,14 +2665,14 @@ def test_recover_authentication_upa_max_login_attempts_succeeds_before_limit(mon
         SimpleNamespace(),
         config,
         failed_operation="watch poll",
-        login_attempts=4,
+        login_attempts=0,
     )
 
-    assert result is True
+    assert result == 1
     assert len(login_calls) == 1
 
 
-def test_recover_authentication_oidc_disabled_still_returns_false(monkeypatch):
+def test_recover_authentication_oidc_disabled_still_returns_none(monkeypatch):
     from onleiharr.cli import recover_authentication
 
     config = SimpleNamespace(
@@ -2673,7 +2687,7 @@ def test_recover_authentication_oidc_disabled_still_returns_false(monkeypatch):
         login_attempts=0,
     )
 
-    assert result is False
+    assert result is None
 
 
 def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
@@ -2690,7 +2704,7 @@ def test_recover_authentication_oidc_browser_failure_propagates(monkeypatch):
         external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
-    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+    with pytest.raises(OnleiheAuthError, match="OIDC automated login failed after 5 attempts"):
         recover_authentication(
             SimpleNamespace(),
             config,
@@ -2713,7 +2727,7 @@ def test_recover_authentication_oidc_browser_failure_logs_error(monkeypatch, cap
         external_auth=SimpleNamespace(auto_login=True, headless=True, timeout_secs=120.0, username="extuser", password="extpass", max_login_attempts=5),
     )
 
-    with pytest.raises(OnleiheAuthError, match="browser login failed"):
+    with pytest.raises(OnleiheAuthError, match="OIDC automated login failed after 5 attempts"):
         recover_authentication(
             SimpleNamespace(),
             config,
@@ -2724,7 +2738,7 @@ def test_recover_authentication_oidc_browser_failure_logs_error(monkeypatch, cap
     assert caplog.record_tuples[-1] == (
         "onleiharr.cli",
         logging.ERROR,
-        "Automated OIDC login failed during watch poll (attempt 1/5): browser login failed",
+        "Automated OIDC login failed during watch poll (attempt 5/5)",
     )
 
 
@@ -2937,6 +2951,7 @@ urls = []
     assert len(auto_login_calls) == 0
 
 
+@pytest.mark.browser
 def test_upa_startup_does_not_import_playwright(monkeypatch, capsys):
     from onleiharr.cli import main as cli_main
 

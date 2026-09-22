@@ -471,11 +471,6 @@ def login(client: OnleiheClient, config: AppConfig) -> None:
                     headless=config.external_auth.headless,
                     timeout_secs=config.external_auth.timeout_secs,
                 )
-                client.session = new_session
-                client.onleihe_id = new_session.onleihe_id or client.onleihe_id
-                client.library_id = new_session.library_id or client.library_id
-                if client.session_callback is not None:
-                    client.session_callback(new_session)
                 return
             raise
     client.login(
@@ -494,53 +489,54 @@ def recover_authentication(
     *,
     failed_operation: str,
     login_attempts: int,
-) -> bool:
-    if login_attempts >= config.external_auth.max_login_attempts:
-        logger.error(
-            "Onleihe authentication failed again during %s before a poll cycle completed.",
-            failed_operation,
-        )
-        return False
+) -> int | None:
     if config.credentials.auth_type == "upa":
+        if login_attempts >= 1:
+            logger.error(
+                "Onleihe authentication failed again during %s before a poll cycle completed.",
+                failed_operation,
+            )
+            return None
         logger.warning(
             "Onleihe authentication expired during %s; attempting a fresh UPA login.",
             failed_operation,
         )
         login(client, config)
         logger.info("Onleihe UPA login recovered; retrying the poll cycle.")
-        return True
-    if config.credentials.auth_type == "open_id":
-        if config.external_auth.auto_login:
-            logger.warning(
-                "Onleihe authentication expired during %s; attempting automated OIDC login.",
-                failed_operation,
+        return 1
+    if config.credentials.auth_type != "open_id" or not config.external_auth.auto_login:
+        return None
+    max_attempts = config.external_auth.max_login_attempts
+    logger.warning(
+        "Onleihe authentication expired during %s; attempting automated OIDC login.",
+        failed_operation,
+    )
+    attempts = login_attempts
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            external_login_automated(
+                client,
+                username=config.external_auth.username,
+                password=config.external_auth.password,
+                headless=config.external_auth.headless,
+                timeout_secs=config.external_auth.timeout_secs,
             )
-            try:
-                new_session = external_login_automated(
-                    client,
-                    username=config.external_auth.username,
-                    password=config.external_auth.password,
-                    headless=config.external_auth.headless,
-                    timeout_secs=config.external_auth.timeout_secs,
-                )
-                client.session = new_session
-                client.onleihe_id = new_session.onleihe_id or client.onleihe_id
-                client.library_id = new_session.library_id or client.library_id
-                if client.session_callback is not None:
-                    client.session_callback(new_session)
-                logger.info("Onleihe OIDC login recovered; retrying the poll cycle.")
-                return True
-            except OnleiheAuthError as exc:
-                logger.error(
-                    "Automated OIDC login failed during %s (attempt %d/%d): %s",
-                    failed_operation,
-                    login_attempts + 1,
-                    config.external_auth.max_login_attempts,
-                    exc,
-                )
-                raise
-        return False
-    return False
+            logger.info("Onleihe OIDC login recovered; retrying the poll cycle.")
+            return attempts
+        except OnleiheAuthError:
+            logger.error(
+                "Automated OIDC login failed during %s (attempt %d/%d)",
+                failed_operation,
+                attempts,
+                max_attempts,
+            )
+            continue
+    raise OnleiheAuthError(
+        f"OIDC automated login failed after {max_attempts} attempts. "
+        "Your credentials may be invalid or the library's login service may be unavailable. "
+        "Check your configuration and try again."
+    ) from None
 
 
 def media_from_item(
@@ -1387,6 +1383,27 @@ def initialize_onleihe_session(
                 logger.exception("Failed to prime my-media cache; will retry later: %s", exc)
             logger.info("Primed my-media cache with %d items.", seeded)
             return time.monotonic() + lendings_interval_secs
+        except OnleiheAuthError:
+            if config.credentials.auth_type != "open_id" or not config.external_auth.auto_login:
+                raise
+            if suspend_if_maintenance_active(
+                client,
+                config.general.poll_interval_secs,
+                failed_operation="Onleihe startup",
+            ):
+                continue
+            login_attempts += 1
+            if login_attempts >= max_attempts:
+                raise OnleiheAuthError(
+                    f"OIDC automated login failed after {max_attempts} attempts. "
+                    "Your credentials may be invalid or the library's login service may be unavailable. "
+                    "Check your configuration and try again."
+                ) from None
+            logger.warning(
+                "OIDC automated login failed (attempt %d/%d); retrying...",
+                login_attempts,
+                max_attempts,
+            )
         except OnleiheAPIError:
             if suspend_if_maintenance_active(
                 client,
@@ -1395,19 +1412,6 @@ def initialize_onleihe_session(
             ):
                 continue
             raise
-        except OnleiheAuthError:
-            login_attempts += 1
-            if login_attempts >= max_attempts:
-                raise OnleiheAuthError(
-                    f"OIDC automated login failed after {max_attempts} attempts. "
-                    "Your credentials may be invalid or the library's login service may be unavailable. "
-                    "Check your configuration and try again."
-                )
-            logger.warning(
-                "OIDC automated login failed (attempt %d/%d); retrying...",
-                login_attempts,
-                max_attempts,
-            )
 
 
 def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
@@ -1441,14 +1445,15 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
             try:
                 poll_result = fetch_all_watched_media(client, config, log_summary=first_run)
             except OnleiheAuthError:
-                if not recover_authentication(
+                new_attempts = recover_authentication(
                     client,
                     config,
                     failed_operation="watch poll",
                     login_attempts=login_attempts,
-                ):
+                )
+                if new_attempts is None:
                     raise
-                login_attempts += 1
+                login_attempts = new_attempts
                 continue
             if poll_result.errors and suspend_if_maintenance_active(
                 client,
@@ -1552,14 +1557,15 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                         )
                         break
                     except OnleiheAuthError:
-                        if not recover_authentication(
+                        new_attempts = recover_authentication(
                             client,
                             config,
                             failed_operation=f"handling media '{media.title}'",
                             login_attempts=login_attempts,
-                        ):
+                        )
+                        if new_attempts is None:
                             raise
-                        login_attempts += 1
+                        login_attempts = new_attempts
                         restart_poll_after_auth_recovery = True
                         break
                     except OnleiheAPIError as exc:
@@ -1589,14 +1595,15 @@ def run_loop(config: AppConfig, args: argparse.Namespace) -> None:
                     )
                     logger.debug("My-media scan handled %d items.", count)
                 except OnleiheAuthError:
-                    if not recover_authentication(
+                    new_attempts = recover_authentication(
                         client,
                         config,
                         failed_operation="my-media scan",
                         login_attempts=login_attempts,
-                    ):
+                    )
+                    if new_attempts is None:
                         raise
-                    login_attempts += 1
+                    login_attempts = new_attempts
                     continue
                 except OnleiheAPIError as exc:
                     if not suspend_if_maintenance_active(

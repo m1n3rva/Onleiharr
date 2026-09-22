@@ -44,41 +44,56 @@ def munich_login_handler(
 
     try:
         username_el = page.wait_for_selector(_SELECTOR_USERNAME, timeout=10000)
-    except Exception as exc:
+    except Exception:
         raise OnleiheAuthError(
             "Munich login form is missing the username field"
-        ) from exc
+        ) from None
 
     try:
         password_el = page.wait_for_selector(_SELECTOR_PASSWORD, timeout=10000)
-    except Exception as exc:
+    except Exception:
         raise OnleiheAuthError(
             "Munich login form is missing the password field"
-        ) from exc
+        ) from None
 
     try:
         submit_el = page.wait_for_selector(_SELECTOR_SUBMIT, timeout=10000)
-    except Exception as exc:
+    except Exception:
         raise OnleiheAuthError(
             "Munich login form is missing the submit button"
-        ) from exc
+        ) from None
 
     try:
         username_el.fill(username)
-        password_el.fill(password)
-        submit_el.click()
-    except Exception as exc:
+    except Exception:
         raise OnleiheAuthError(
-            f"Munich login form interaction failed: {exc}"
-        ) from exc
+            "Munich login form: could not fill username field"
+        ) from None
 
-    # Optional consent page: click at most one recognized button.
+    try:
+        password_el.fill(password)
+    except Exception:
+        raise OnleiheAuthError(
+            "Munich login form: could not fill password field"
+        ) from None
+
+    try:
+        submit_el.click()
+    except Exception:
+        raise OnleiheAuthError(
+            "Munich login form: could not submit the login form"
+        ) from None
+
+    # Optional consent page: check all candidate buttons, click at most one.
     consent_buttons = page.query_selector_all(
         'input[type="submit"], button, a'
     )
-    for btn in consent_buttons[:1]:
+    for btn in consent_buttons:
         try:
-            label = btn.text_content().strip().lower()
+            label = btn.text_content()
+            if not label:
+                label = btn.get_attribute("value") or ""
+            label = label.strip().casefold()
         except Exception:
             continue
         if label in _CONSENT_LABELS:

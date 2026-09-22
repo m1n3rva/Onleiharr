@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import stat
 
@@ -11,11 +13,11 @@ def _make_fake_page(**kwargs):
     """Create a FakePage class with the given overrides."""
     defaults = {
         "__init__": lambda self: setattr(self, "_route_callback", None),
-        "goto": lambda self, url: None,
+        "goto": lambda self, url: setattr(self, "_current_url", url),
         "wait_for_timeout": lambda self, ms: None,
         "on": lambda self, event, callback: None,
         "route": lambda self, pattern, callback: setattr(self, "_route_callback", callback),
-        "url": "about:blank",
+        "url": property(lambda self: getattr(self, "_current_url", "about:blank")),
     }
     defaults.update(kwargs)
 
@@ -152,6 +154,7 @@ def test_run_external_login_browser_calls_handler_once_after_goto(monkeypatch):
             pass
 
     def fake_goto(self, url):
+        self._current_url = url
         # Simulate route interception during navigation
         self._route_callback(FakeRoute())
 
@@ -160,10 +163,10 @@ def test_run_external_login_browser_calls_handler_once_after_goto(monkeypatch):
     fake_chromium = _make_fake_chromium(fake_browser_cls)
     fake_playwright_cls = _make_fake_playwright(fake_chromium)
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
     monkeypatch.setattr(
         "onleiharr.auth._complete_external_login",
-        lambda callback_url, redirect_url, expected_state: SessionState(access_token="token"),
+        lambda client, *, callback_url, redirect_url, expected_state: SessionState(access_token="token"),
     )
 
     session = _run_external_login_browser(
@@ -173,6 +176,7 @@ def test_run_external_login_browser_calls_handler_once_after_goto(monkeypatch):
         headless=True,
         timeout_secs=10.0,
         login_handler=fake_handler,
+        client=SimpleNamespace(host="example.com"),
     )
 
     assert session.access_token == "token"
@@ -198,6 +202,7 @@ def test_run_external_login_browser_processes_callback_and_exchanges_code(monkey
             pass
 
     def fake_goto(self, url):
+        self._current_url = url
         self._route_callback(FakeRoute())
 
     fake_page_cls = _make_fake_page(goto=fake_goto)
@@ -217,7 +222,7 @@ def test_run_external_login_browser_processes_callback_and_exchanges_code(monkey
             exchanged_redirect.append(redirect_url)
             return SessionState(access_token="exchanged-token")
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
 
     session = _run_external_login_browser(
         authorization_url="https://auth.example.com/login",
@@ -238,7 +243,7 @@ def test_run_external_login_browser_processes_callback_and_exchanges_code(monkey
 def test_run_external_login_browser_timeout_raises(monkeypatch):
     fake_playwright_cls = _make_fake_playwright()
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
 
     with pytest.raises(OnleiheAuthError, match="Timed out"):
         _run_external_login_browser(
@@ -252,7 +257,7 @@ def test_run_external_login_browser_timeout_raises(monkeypatch):
 
 
 def test_run_external_login_browser_import_error_raises(monkeypatch):
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", None)
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: None)
 
     with pytest.raises(OnleiheAuthError, match="Playwright"):
         _run_external_login_browser(
@@ -284,7 +289,7 @@ def test_run_external_login_browser_launch_error_raises(monkeypatch):
         def __exit__(self, *args):
             pass
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: FakePlaywright())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: FakePlaywright)
 
     with pytest.raises(OnleiheAuthError, match="launch"):
         _run_external_login_browser(
@@ -299,6 +304,7 @@ def test_run_external_login_browser_launch_error_raises(monkeypatch):
 
 def test_run_external_login_browser_navigation_error_raises(monkeypatch):
     def fake_goto(self, url):
+        self._current_url = url
         raise Exception("navigation failed")
 
     fake_page_cls = _make_fake_page(goto=fake_goto)
@@ -306,9 +312,9 @@ def test_run_external_login_browser_navigation_error_raises(monkeypatch):
     fake_chromium = _make_fake_chromium(fake_browser_cls)
     fake_playwright_cls = _make_fake_playwright(fake_chromium)
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
 
-    with pytest.raises(OnleiheAuthError, match="navigation"):
+    with pytest.raises(OnleiheAuthError, match="navigate"):
         _run_external_login_browser(
             authorization_url="https://auth.example.com/login",
             redirect_url="https://example.com",
@@ -323,14 +329,18 @@ def test_run_external_login_browser_closes_on_handler_failure(monkeypatch):
     closed = []
 
     class FakePage:
+        _current_url = "https://auth.example.com/login"
         def goto(self, url):
-            pass
+            self._current_url = url
         def wait_for_timeout(self, ms):
             pass
         def on(self, event, callback):
             pass
         def route(self, pattern, callback):
             pass
+        @property
+        def url(self):
+            return self._current_url
 
     class FakeBrowser:
         def new_page(self):
@@ -349,7 +359,7 @@ def test_run_external_login_browser_closes_on_handler_failure(monkeypatch):
         def __exit__(self, *args):
             pass
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: FakePlaywright())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: FakePlaywright)
 
     with pytest.raises(OnleiheAuthError, match="handler"):
         _run_external_login_browser(
@@ -378,6 +388,7 @@ def test_run_external_login_browser_rejects_wrong_host(monkeypatch):
             pass
 
     def fake_goto(self, url):
+        self._current_url = url
         self._route_callback(FakeRoute())
 
     fake_page_cls = _make_fake_page(goto=fake_goto)
@@ -385,7 +396,15 @@ def test_run_external_login_browser_rejects_wrong_host(monkeypatch):
     fake_chromium = _make_fake_chromium(fake_browser_cls)
     fake_playwright_cls = _make_fake_playwright(fake_chromium)
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
+
+    def raise_host_error(client, *, callback_url, redirect_url, expected_state):
+        raise OnleiheAuthError("redirect host mismatch")
+
+    monkeypatch.setattr(
+        "onleiharr.auth._complete_external_login",
+        raise_host_error,
+    )
 
     with pytest.raises(OnleiheAuthError, match="host"):
         _run_external_login_browser(
@@ -395,10 +414,13 @@ def test_run_external_login_browser_rejects_wrong_host(monkeypatch):
             headless=True,
             timeout_secs=10.0,
             login_handler=lambda page: None,
+            client=SimpleNamespace(host="example.com"),
         )
 
 
 def test_run_external_login_browser_rejects_wrong_state(monkeypatch):
+    from types import SimpleNamespace
+
     class FakeRequest:
         def __init__(self):
             self.url = "https://muenchen.onleihe.de/?code=testcode&state=wrong-state"
@@ -412,6 +434,7 @@ def test_run_external_login_browser_rejects_wrong_state(monkeypatch):
             pass
 
     def fake_goto(self, url):
+        self._current_url = url
         self._route_callback(FakeRoute())
 
     fake_page_cls = _make_fake_page(goto=fake_goto)
@@ -419,7 +442,15 @@ def test_run_external_login_browser_rejects_wrong_state(monkeypatch):
     fake_chromium = _make_fake_chromium(fake_browser_cls)
     fake_playwright_cls = _make_fake_playwright(fake_chromium)
 
-    monkeypatch.setattr("onleiharr.auth.sync_playwright", lambda: fake_playwright_cls())
+    monkeypatch.setattr("onleiharr.auth._load_sync_playwright", lambda: fake_playwright_cls)
+
+    def raise_state_error(client, *, callback_url, redirect_url, expected_state):
+        raise OnleiheAuthError("state mismatch")
+
+    monkeypatch.setattr(
+        "onleiharr.auth._complete_external_login",
+        raise_state_error,
+    )
 
     with pytest.raises(OnleiheAuthError, match="state"):
         _run_external_login_browser(
@@ -429,4 +460,5 @@ def test_run_external_login_browser_rejects_wrong_state(monkeypatch):
             headless=True,
             timeout_secs=10.0,
             login_handler=lambda page: None,
+            client=SimpleNamespace(host="example.com"),
         )

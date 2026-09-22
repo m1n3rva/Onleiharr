@@ -14,10 +14,48 @@ from urllib.parse import parse_qs, urlparse
 from onleiharr._vendor.onleihe import OnleiheAuthError, OnleiheClient, SessionState
 from onleiharr.external_auth import get_login_handler
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    sync_playwright = None  # type: ignore[assignment]
+
+def _load_sync_playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        sync_playwright = None  # type: ignore[assignment]
+    return sync_playwright
+
+
+def _find_system_browser() -> str | None:
+    for name in ("chromium", "chromium-browser", "google-chrome", "chrome"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _origins_match(url: str, target_scheme: str, target_host: str, target_port: int | None) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme.casefold() != target_scheme.casefold():
+        return False
+    if parsed.hostname is None:
+        return False
+    if parsed.hostname.casefold() != target_host.casefold():
+        return False
+    if parsed.hostname.casefold().endswith(target_host.casefold()) and len(parsed.hostname) > len(target_host):
+        return False
+    effective_port = parsed.port or (443 if parsed.scheme.casefold() == "https" else 80)
+    if target_port is None:
+        target_port = 443 if target_scheme.casefold() == "https" else 80
+    if effective_port != target_port:
+        return False
+    return True
+
+
+def _normalize_path(path: str) -> str:
+    if not path or path == "/":
+        return ""
+    return path
 
 
 def default_session_path(config_path: Path) -> Path:
@@ -57,7 +95,7 @@ def _complete_external_login(
     redirect_url: str,
 ) -> SessionState:
     parsed = urlparse(callback_url)
-    if parsed.scheme != "https" or parsed.netloc.casefold() != client.host.casefold():
+    if not _origins_match(callback_url, "https", client.host, None):
         raise OnleiheAuthError(
             "Redirect URL does not belong to the configured Onleihe host"
         )
@@ -102,9 +140,9 @@ def _run_external_login_browser(
     login_handler: Callable[[_PageLike], None] | None = None,
     *,
     client: OnleiheClient | None = None,
-    _capture_callback_url: str | None = None,
 ) -> SessionState:
-    if sync_playwright is None:
+    sync_pw = _load_sync_playwright()
+    if sync_pw is None:
         raise OnleiheAuthError(
             "External login needs Playwright. Install with: pipx inject onleiharr playwright"
         )
@@ -117,45 +155,66 @@ def _run_external_login_browser(
         candidate = route.request.url
         parsed = urlparse(candidate)
         if "code" in parse_qs(parsed.query) or "error" in parse_qs(parsed.query):
-            callback_url = candidate
-            route.abort()
-            return
+            if _origins_match(candidate, parsed.scheme, parsed.hostname or "", parsed.port):
+                callback_url = candidate
+                route.abort()
+                return
         route.continue_()
 
     deadline = time.monotonic() + timeout_secs
     browser = None
     try:
-        with sync_playwright() as playwright:
+        with sync_pw() as playwright:
+            system_browser = _find_system_browser()
             try:
-                browser = playwright.chromium.launch(headless=headless)
-            except Exception as exc:
+                if system_browser:
+                    browser = playwright.chromium.launch(executable_path=system_browser, headless=headless)
+                else:
+                    browser = playwright.chromium.launch(headless=headless)
+            except Exception:
                 raise OnleiheAuthError(
-                    f"Failed to launch browser: {exc}"
-                ) from exc
+                    "Failed to launch browser. Install a supported browser: "
+                    "system Chromium (chromium/chromium-browser) or "
+                    "run 'python -m playwright install chromium'."
+                ) from None
             page = browser.new_page()
             page_ref.append(page)
             page.route("**/*", intercept)
             try:
                 page.goto(authorization_url)
-            except Exception as exc:
+            except Exception:
                 raise OnleiheAuthError(
-                    f"Failed to navigate to authorization URL: {exc}"
-                ) from exc
+                    "Failed to navigate to authorization URL"
+                ) from None
+
+            # Validate login origin before calling handler
             if login_handler is not None:
+                try:
+                    current_url = page.url
+                    auth_parsed = urlparse(authorization_url)
+                    if not _origins_match(
+                        current_url,
+                        auth_parsed.scheme or "https",
+                        auth_parsed.hostname or "",
+                        auth_parsed.port,
+                    ):
+                        raise OnleiheAuthError(
+                            "Login page redirected to an unexpected origin"
+                        ) from None
+                except OnleiheAuthError:
+                    raise
+                except Exception:
+                    raise OnleiheAuthError(
+                        "Failed to validate login page origin"
+                    ) from None
                 try:
                     login_handler(page)
                 except OnleiheAuthError:
                     raise
-                except Exception as exc:
-                    raise OnleiheAuthError(
-                        f"External login handler failed: {exc}"
-                    ) from exc
-            if _capture_callback_url:
-                try:
-                    page.wait_for_url(_capture_callback_url, timeout=timeout_secs * 1000)
-                    callback_url = page.url
                 except Exception:
-                    pass
+                    raise OnleiheAuthError(
+                        "External login handler failed"
+                    ) from None
             # Wait for navigation to complete and check page URL for callback
             while callback_url is None and time.monotonic() < deadline:
                 page.wait_for_timeout(200)
@@ -163,7 +222,8 @@ def _run_external_login_browser(
                 parsed = urlparse(current_url)
                 query = parse_qs(parsed.query)
                 if "code" in query or "error" in query:
-                    callback_url = current_url
+                    if _origins_match(current_url, parsed.scheme, parsed.hostname or "", parsed.port):
+                        callback_url = current_url
                     break
     finally:
         if browser is not None:
@@ -183,22 +243,9 @@ def _run_external_login_browser(
             redirect_url=redirect_url,
         )
 
-    parsed = urlparse(callback_url)
-    if parsed.scheme != "https" or parsed.netloc.casefold() != "muenchen.onleihe.de".casefold():
-        raise OnleiheAuthError(
-            "Redirect URL does not belong to the configured Onleihe host"
-        )
-    query = parse_qs(parsed.query)
-    if query.get("state", [None])[0] != expected_state:
-        raise OnleiheAuthError("OpenID redirect state does not match")
-    code = query.get("code", [None])[0]
-    if not code:
-        error = query.get(
-            "error_description", query.get("error", ["missing authorization code"])
-        )[0]
-        raise OnleiheAuthError(f"OpenID authorization failed: {error}")
-
-    return SessionState(access_token="token")
+    raise OnleiheAuthError(
+        "External login requires an OnleiheClient to complete the session exchange"
+    )
 
 
 def external_login_manual(client: OnleiheClient, *, input_func=input) -> SessionState:
